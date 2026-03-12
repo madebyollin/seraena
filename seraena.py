@@ -82,7 +82,20 @@ class Seraena(nn.Module):
     def _disc_train_step(self, real, fake, ctx):
         self.disc.train()
 
-        # add new fake / ctx to buffer
+        # sample half from replay buffer (past fakes), half fresh from current batch
+        n_samples = len(real)
+        n_buff = min(n_samples // 2, len(self.buff))
+        n_fresh = n_samples - n_buff
+        fake_shuf, fake_shuf_ctx = fake[:n_fresh], ctx[:n_fresh]
+        if n_buff > 0:
+            buff_fake, buff_ctx = (
+                th.stack(items, 0)
+                for items in zip(*(random.choice(self.buff) for _ in range(n_buff)))
+            )
+            fake_shuf = th.cat([fake_shuf, buff_fake], 0)
+            fake_shuf_ctx = th.cat([fake_shuf_ctx, buff_ctx], 0)
+
+        # add current batch to replay buffer
         for fake_i, ctx_i in zip(fake, ctx):
             if len(self.buff) >= self.max_buff_len:
                 i = random.randrange(0, len(self.buff))
@@ -90,15 +103,6 @@ class Seraena(nn.Module):
                 self.buff[i][1].copy_(ctx_i)
             else:
                 self.buff.append((fake_i.clone(), ctx_i.clone()))
-
-        # sample half of fake / ctx new, half from buffer
-        n = len(fake) // 2
-        fake_shuf, fake_shuf_ctx = (
-            th.stack(items, 0)
-            for items in zip(*(random.choice(self.buff) for _ in range(n)))
-        )
-        fake_shuf = th.cat([fake[:n], fake_shuf], 0)
-        fake_shuf_ctx = th.cat([ctx[:n], fake_shuf_ctx], 0)
 
         with th.cuda.amp.autocast(enabled=self.use_amp):
             fake_mask = th.rand_like(real[:, :1, :1, :1]) < 0.5
